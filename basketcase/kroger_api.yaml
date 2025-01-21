@@ -1,0 +1,106 @@
+openapi: 3.0.0
+info:
+  title: Kroger API Documentation
+  version: 1.0.0
+  description: Documentation for Kroger's Public APIs
+
+servers:
+  - url: https://api.kroger.com/v1
+    description: Production environment for live traffic
+  - url: https://api-ce.kroger.com/v1
+    description: Certification environment for testing
+
+components:
+  securitySchemes:
+    OAuth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://api.kroger.com/v1/connect/oauth2/token
+          scopes:
+            product.compact: Read-only access to product data
+
+  schemas:
+    AuthError:
+      type: object
+      properties:
+        error:
+          type: string
+          description: A brief description of the error
+        error_description:
+          type: string
+          description: A more detailed description of the error
+      example:
+        error: invalid_token
+        error_description: The access token is invalid or has expired
+
+    ApiError:
+      type: object
+      properties:
+        errors:
+          type: object
+          properties:
+            timestamp:
+              type: integer
+              format: int64
+              description: The time the error occurred
+            code:
+              type: string
+              description: The code returned from the server
+            reason:
+              type: string
+              description: A short description explaining the cause of the error
+      example:
+        errors:
+          timestamp: 1568391692365
+          code: PRODUCT-2011-400
+          reason: Field 'locationId' must have a length of 8 characters
+
+paths:
+  /connect/oauth2/token:
+    post:
+      summary: Get OAuth2 access token
+      description: Obtain an access token using client credentials
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials]
+                scope:
+                  type: string
+                  enum: [product.compact]
+      responses:
+        '200':
+          description: Successful token response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  token_type:
+                    type: string
+                  expires_in:
+                    type: integer
+                  scope:
+                    type: string
+
+security:
+  - OAuth2: []
+
+x-environment-notes:
+  production:
+    - Use for all production traffic
+    - Required for Identity and Cart APIs testing
+    - Supports real user accounts
+  certification:
+    - Use for testing API integrations
+    - Data may be incomplete or inaccurate
+    - User accounts not available
+    - Not suitable for Identity or Cart API testing

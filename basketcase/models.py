@@ -22,10 +22,10 @@ class Store(Base):
     """Store model representing a Kroger store location."""
     __tablename__ = "stores"
 
-    store_id: Mapped[str] = mapped_column(String, primary_key=True)
+    id: Mapped[str] = mapped_column(String(8), primary_key=True)  # locationId is 8 chars
     name: Mapped[str] = mapped_column(String, nullable=False)
     address: Mapped[str] = mapped_column(Text, nullable=False)
-    postal_code: Mapped[str] = mapped_column(String, nullable=False)
+    postal_code: Mapped[str] = mapped_column(String(5), nullable=False)  # US ZIP codes are 5 digits
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     hours: Mapped[Optional[str]] = mapped_column(Text)
@@ -88,7 +88,7 @@ class Basket(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    store_id: Mapped[str] = mapped_column(ForeignKey("stores.store_id"), nullable=False)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -131,7 +131,7 @@ class PriceHistory(Base):
         ForeignKey("products.product_id"), nullable=False
     )
     store_id: Mapped[str] = mapped_column(
-        ForeignKey("stores.store_id"), nullable=False
+        ForeignKey("stores.id"), nullable=False
     )
     price: Mapped[float] = mapped_column(Float, nullable=False)
     promo_price: Mapped[Optional[float]] = mapped_column(Float)

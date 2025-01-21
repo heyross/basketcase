@@ -1,4 +1,5 @@
 """Business logic services."""
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -9,6 +10,7 @@ from basketcase.api import KrogerAPI
 from basketcase.models import (Basket, BasketItem, Category, ErrorLog,
                              InflationIndex, PriceHistory, Product, Store)
 
+logger = logging.getLogger(__name__)
 
 class StoreService:
     """Service for store-related operations."""
@@ -19,22 +21,45 @@ class StoreService:
 
     def find_nearby_stores(self, postal_code: str, limit: int = 5) -> List[Store]:
         """Find and save nearby stores."""
+        logger.info(f"Finding stores near {postal_code}")
         stores_data = self.api.find_stores(postal_code, limit)
         stores = []
 
         for store_data in stores_data:
-            store = Store(
-                store_id=store_data["locationId"],
-                name=store_data["name"],
-                address=store_data["address"]["addressLine1"],
-                postal_code=store_data["address"]["zipCode"],
-                latitude=store_data["geolocation"]["latitude"],
-                longitude=store_data["geolocation"]["longitude"]
-            )
-            self.db.merge(store)
-            stores.append(store)
+            try:
+                logger.debug(f"Processing store data: {store_data}")
+                
+                # Extract address data safely
+                address_data = store_data.get("address", {})
+                address_line = address_data.get("addressLine1", "")
+                zip_code = address_data.get("zipCode", "")
+                
+                # Extract geolocation data safely
+                geo_data = store_data.get("geolocation", {})
+                latitude = geo_data.get("latitude", 0.0)
+                longitude = geo_data.get("longitude", 0.0)
+                
+                store = Store(
+                    id=store_data.get("locationId", ""),
+                    name=store_data.get("name", ""),
+                    address=address_line,
+                    postal_code=zip_code,
+                    latitude=float(latitude) if latitude else 0.0,
+                    longitude=float(longitude) if longitude else 0.0
+                )
+                logger.debug(f"Created store object: {store}")
+                self.db.merge(store)
+                stores.append(store)
+            except Exception as e:
+                logger.error(f"Error processing store data: {e}", exc_info=True)
+                continue
 
-        self.db.commit()
+        if stores:
+            logger.info(f"Found {len(stores)} stores")
+            self.db.commit()
+        else:
+            logger.warning("No stores found")
+            
         return stores
 
 

@@ -1,6 +1,10 @@
 """Configuration settings for the basketcase package."""
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Base directory of the project
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,12 +26,10 @@ KROGER_BASE_URL = "https://api.kroger.com/v1"
 KROGER_CLIENT_ID = os.getenv("KROGER_CLIENT_ID")
 KROGER_CLIENT_SECRET = os.getenv("KROGER_CLIENT_SECRET")
 
-# Error logging
-ERROR_LOG_PATH = LOGS_DIR / "error.log"
+# Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
-# Price update settings
-PRICE_UPDATE_INTERVAL = 7  # days
-MAX_PRODUCTS_PER_REQUEST = 50  # Kroger API limit
-
-# Basket settings
-MAX_BASKET_ITEMS = 50
+if not KROGER_CLIENT_ID or not KROGER_CLIENT_SECRET:
+    raise ValueError(
+        "Missing Kroger API credentials. Please set KROGER_CLIENT_ID and KROGER_CLIENT_SECRET environment variables."
+    )
