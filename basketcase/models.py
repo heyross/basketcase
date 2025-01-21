@@ -1,10 +1,16 @@
 """Database models for the application."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (Boolean, DateTime, Enum, Float, ForeignKey, Integer,
                        String, Text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import Column
+
+
+def utcnow():
+    """Get current UTC timestamp."""
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -24,10 +30,10 @@ class Store(Base):
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     hours: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
     last_updated: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
     # Relationships
@@ -43,7 +49,7 @@ class Category(Base):
     name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
 
     # Relationships
@@ -64,10 +70,10 @@ class Product(Base):
     size: Mapped[Optional[str]] = mapped_column(String)
     image_url: Mapped[Optional[str]] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
     last_updated: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
 
     # Relationships
@@ -84,7 +90,7 @@ class Basket(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.store_id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
     is_template: Mapped[bool] = mapped_column(Boolean, default=False)
     parent_basket_id: Mapped[Optional[int]] = mapped_column(ForeignKey("baskets.id"))
@@ -108,7 +114,7 @@ class BasketItem(Base):
     )
     quantity: Mapped[int] = mapped_column(Integer, default=1)
     added_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
 
     # Relationships
@@ -130,7 +136,7 @@ class PriceHistory(Base):
     price: Mapped[float] = mapped_column(Float, nullable=False)
     promo_price: Mapped[Optional[float]] = mapped_column(Float)
     captured_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
 
     # Relationships
@@ -145,10 +151,11 @@ class InflationIndex(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     basket_id: Mapped[int] = mapped_column(ForeignKey("baskets.id"), nullable=False)
     category_id: Mapped[Optional[int]] = mapped_column(ForeignKey("categories.id"))
-    base_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    base_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    base_index: Mapped[float] = mapped_column(Float, nullable=False, default=100.0)
     current_index: Mapped[float] = mapped_column(Float, nullable=False)
-    calculated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+    calculation_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
     )
 
     # Relationships
@@ -157,15 +164,14 @@ class InflationIndex(Base):
 
 
 class ErrorLog(Base):
-    """Error log model for tracking application errors."""
+    """Error log model."""
+
     __tablename__ = "error_logs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    logged_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
-    )
-    level: Mapped[str] = mapped_column(String, nullable=False)  # ERROR, WARNING, INFO
-    component: Mapped[str] = mapped_column(String, nullable=False)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
-    details: Mapped[Optional[str]] = mapped_column(Text)
-    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime(timezone=True), default=utcnow)
+    level = Column(String, nullable=False)
+    component = Column(String, nullable=False)
+    message = Column(String, nullable=False)
+    details = Column(String)
+    resolved = Column(Boolean, default=False)

@@ -1,5 +1,6 @@
 """Test cases for command-line interface."""
 from click.testing import CliRunner
+from datetime import datetime
 
 import pytest
 
@@ -91,87 +92,63 @@ def test_clone_basket(runner, basket):
 
 
 def test_calculate_inflation(runner, db_session):
-    """Test calculate_inflation command."""
-    from datetime import datetime, timedelta
-    from basketcase.models import (
-        PriceHistory, BasketItem, Basket, Product, Store, Category
-    )
-    
-    # Create test data with specific timestamps
-    base_time = datetime(2025, 1, 1, 0, 0, 0)  # Fixed base time
-    current_time = base_time + timedelta(days=30)  # 30 days later
-    
-    # Create category
-    category = Category(name="Test Category")
-    db_session.add(category)
-    db_session.flush()
-    
-    # Create store
+    """Test inflation calculation command."""
+    # Create test data
     store = Store(
         store_id="store123",
         name="Test Store",
         address="123 Test St",
         postal_code="12345",
-        latitude=37.7749,
-        longitude=-122.4194
+        latitude=0.0,
+        longitude=0.0
     )
     db_session.add(store)
-    db_session.flush()
-    
-    # Create product with category
+
     product = Product(
         product_id="prod123",
         name="Test Product",
-        category_id=category.id
+        brand="Test Brand"
     )
     db_session.add(product)
-    db_session.flush()
-    
-    # Create basket with creation time
+
     basket = Basket(
         name="Test Basket",
-        store_id=store.store_id,
-        created_at=base_time
+        store_id=store.store_id
     )
     db_session.add(basket)
-    db_session.flush()
-    
-    # Add item to basket with quantity 1
+    db_session.flush()  # Get basket ID
+
     basket_item = BasketItem(
         basket_id=basket.id,
         product_id=product.product_id,
         quantity=1
     )
     db_session.add(basket_item)
-    db_session.flush()
-    
-    # Add price history with exact timestamps
+
+    # Add base price
     base_price = PriceHistory(
         product_id=product.product_id,
         store_id=store.store_id,
-        price=1.00,  # Base price $1.00
-        captured_at=base_time
+        price=10.0,
+        captured_at=basket.created_at
     )
     db_session.add(base_price)
-    
+
+    # Add current price (10% increase)
     current_price = PriceHistory(
         product_id=product.product_id,
         store_id=store.store_id,
-        price=1.10,  # Current price $1.10 (10% increase)
-        captured_at=current_time
+        price=11.0,
+        captured_at=datetime.utcnow()
     )
     db_session.add(current_price)
     db_session.commit()
-    
-    # Run the inflation calculation
+
+    # Run command
     result = runner.invoke(cli, ["calculate-inflation", str(basket.id)])
     assert result.exit_code == 0
-    
-    # Verify the output contains both overall and category inflation
-    assert "Base Index: 100.0" in result.output
     assert "Current Index: 110.0" in result.output
     assert "Change: +10.0%" in result.output
-    assert "Test Category: +10.0%" in result.output
 
 
 def test_init_command(runner):

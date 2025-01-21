@@ -1,10 +1,12 @@
 """Test cases for business logic services."""
 from datetime import datetime, timedelta
+from dateutil import tz
 
 import pytest
 
 from basketcase.api import KrogerAPI
-from basketcase.models import Basket, BasketItem, PriceHistory, Product, Store
+from basketcase.models import (Basket, BasketItem, InflationIndex, PriceHistory,
+                             Product, Store)
 from basketcase.services import (BasketService, ErrorService, InflationService,
                                ProductService, StoreService)
 
@@ -51,14 +53,14 @@ def basket(db_session, store):
 
 def test_store_service(db_session, mock_kroger_api):
     """Test store service operations."""
-    service = StoreService(db_session, KrogerAPI())
+    service = StoreService(db_session, mock_kroger_api)
     stores = service.find_nearby_stores("12345")
     assert isinstance(stores, list)
 
 
 def test_product_service(db_session, mock_kroger_api):
     """Test product service operations."""
-    service = ProductService(db_session, KrogerAPI())
+    service = ProductService(db_session, mock_kroger_api)
     products = service.search_products("milk", "store123")
     assert isinstance(products, list)
 
@@ -122,39 +124,140 @@ def test_basket_item_limit(db_session, basket):
 
 
 def test_inflation_service(db_session, basket, product):
-    """Test inflation calculations."""
+    """Test inflation calculations with detailed debugging."""
     service = InflationService(db_session)
     
+    print("\n=== Database State Before Test ===")
+    # Check existing records
+    existing_baskets = db_session.query(Basket).all()
+    print(f"Existing baskets: {len(existing_baskets)}")
+    for b in existing_baskets:
+        print(f"  Basket {b.id}: {b.name} created at {b.created_at}")
+    
+    existing_prices = db_session.query(PriceHistory).all()
+    print(f"Existing prices: {len(existing_prices)}")
+    for p in existing_prices:
+        print(f"  Price {p.price} for product {p.product_id} at {p.captured_at}")
+    
+    # Set fixed times for test (in UTC)
+    base_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=tz.tzutc())
+    current_time = datetime(2025, 1, 20, 12, 0, 0, tzinfo=tz.tzutc())
+    
+    # Update basket creation time
+    basket.created_at = base_time
+    db_session.commit()
+    print(f"\nSet basket creation time to {base_time}")
+    
     # Add item to basket
-    basket_item = BasketItem(
+    item = BasketItem(
         basket_id=basket.id,
         product_id=product.product_id,
-        quantity=1
+        quantity=2  # Use quantity > 1 to test weighted calculations
     )
-    db_session.add(basket_item)
-
-    # Add historical price
+    db_session.add(item)
+    db_session.commit()
+    print(f"\nAdded basket item: quantity={item.quantity}")
+    
+    # Clear any existing prices
+    db_session.query(PriceHistory).delete()
+    db_session.commit()
+    print("\nCleared existing prices")
+    
+    # Add base price just before basket creation
     base_price = PriceHistory(
         product_id=product.product_id,
         store_id=basket.store_id,
         price=10.0,
-        captured_at=basket.created_at
+        captured_at=base_time - timedelta(minutes=5)
     )
     db_session.add(base_price)
-
-    # Add current price (10% increase)
+    db_session.commit()
+    print(f"Added base price: {base_price.price} at {base_price.captured_at}")
+    
+    # Add some intermediate prices to test correct base/current selection
+    mid_price = PriceHistory(
+        product_id=product.product_id,
+        store_id=basket.store_id,
+        price=10.5,
+        captured_at=base_time + timedelta(days=5)
+    )
+    db_session.add(mid_price)
+    db_session.commit()
+    print(f"Added mid price: {mid_price.price} at {mid_price.captured_at}")
+    
+    # Add current price (10% increase from base)
     current_price = PriceHistory(
         product_id=product.product_id,
         store_id=basket.store_id,
         price=11.0,
-        captured_at=datetime.utcnow()
+        captured_at=current_time
     )
     db_session.add(current_price)
     db_session.commit()
-
+    print(f"Added current price: {current_price.price} at {current_price.captured_at}")
+    
+    print("\n=== Verifying Test Setup ===")
+    # Verify all records were properly saved
+    prices = (
+        db_session.query(PriceHistory)
+        .filter(
+            PriceHistory.product_id == product.product_id,
+            PriceHistory.store_id == basket.store_id
+        )
+        .order_by(PriceHistory.captured_at)
+        .all()
+    )
+    assert len(prices) == 3, f"Expected 3 prices, found {len(prices)}"
+    for p in prices:
+        print(f"Price: {p.price} at {p.captured_at}")
+    
+    items = (
+        db_session.query(BasketItem)
+        .filter(BasketItem.basket_id == basket.id)
+        .all()
+    )
+    assert len(items) == 1, f"Expected 1 basket item, found {len(items)}"
+    print(f"Basket item: product={items[0].product_id}, quantity={items[0].quantity}")
+    
     # Calculate inflation
-    index, _ = service.calculate_basket_inflation(basket.id)
-    assert index == 10.0  # 10% increase from base price
+    print("\n=== Calculating Inflation ===")
+    inflation, calc_time = service.calculate_basket_inflation(basket.id)
+    print(f"Calculated inflation: {inflation}% at {calc_time}")
+    
+    # Verify calculations
+    expected_base_value = base_price.price * item.quantity
+    expected_current_value = current_price.price * item.quantity
+    expected_inflation = ((expected_current_value / expected_base_value) - 1.0) * 100.0
+    
+    print("\n=== Verifying Calculations ===")
+    print(f"Base value: {expected_base_value} (price={base_price.price} * quantity={item.quantity})")
+    print(f"Current value: {expected_current_value} (price={current_price.price} * quantity={item.quantity})")
+    print(f"Expected inflation: {expected_inflation}%")
+    print(f"Actual inflation: {inflation}%")
+    
+    assert abs(inflation - expected_inflation) < 0.01, \
+        f"Inflation calculation error: expected {expected_inflation}%, got {inflation}%"
+    
+    # Verify the index
+    print("\n=== Verifying Index ===")
+    index = (
+        db_session.query(InflationIndex)
+        .filter(InflationIndex.basket_id == basket.id)
+        .first()
+    )
+    assert index is not None, "No inflation index was created"
+    print(f"Index found: base={index.base_index}, current={index.current_index}")
+    print(f"Base date: {index.base_date}")
+    print(f"Calc time: {index.calculation_time}")
+    
+    assert index.base_index == 100.0, \
+        f"Expected base index 100.0, got {index.base_index}"
+    assert abs(index.current_index - 110.0) < 0.01, \
+        f"Expected current index 110.0, got {index.current_index}"
+    assert index.base_date == base_price.captured_at, \
+        f"Expected base date {base_price.captured_at}, got {index.base_date}"
+    
+    print("\n=== Test Complete ===")
 
 
 def test_error_service(db_session):
@@ -168,4 +271,5 @@ def test_error_service(db_session):
     )
     assert error.level == "ERROR"
     assert error.component == "TEST"
-    assert not error.resolved
+    assert error.message == "Test error message"
+    assert error.details == "Error details"

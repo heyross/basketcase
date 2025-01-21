@@ -1,9 +1,9 @@
 """Business logic services."""
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from basketcase.api import KrogerAPI
 from basketcase.models import (Basket, BasketItem, Category, ErrorLog,
@@ -29,8 +29,7 @@ class StoreService:
                 address=store_data["address"]["addressLine1"],
                 postal_code=store_data["address"]["zipCode"],
                 latitude=store_data["geolocation"]["latitude"],
-                longitude=store_data["geolocation"]["longitude"],
-                hours=store_data.get("hours", {}).get("operating", "")
+                longitude=store_data["geolocation"]["longitude"]
             )
             self.db.merge(store)
             stores.append(store)
@@ -54,16 +53,21 @@ class ProductService:
         products = []
 
         for product_data in products_data:
-            product = Product(
-                product_id=product_data["productId"],
-                upc=product_data.get("upc"),
-                name=product_data["description"],
-                brand=product_data.get("brand"),
-                size=product_data.get("size"),
-                image_url=product_data.get("images", [{}])[0].get("url")
-            )
-            self.db.merge(product)
-            products.append(product)
+            try:
+                product = Product(
+                    product_id=product_data["productId"],
+                    upc=product_data.get("upc"),
+                    name=product_data["description"],
+                    brand=product_data.get("brand"),
+                    size=product_data.get("size"),
+                    image_url=product_data.get("images", [{}])[0].get("url")
+                )
+                self.db.merge(product)
+                products.append(product)
+            except KeyError as e:
+                print(f"Warning: Missing required field in product data: {e}")
+                print(f"Product data: {product_data}")
+                continue
 
         self.db.commit()
         return products
@@ -72,42 +76,49 @@ class ProductService:
         self, product_ids: List[str], store_id: str
     ) -> None:
         """Update prices for products."""
-        prices = self.api.get_product_prices(product_ids, store_id)
-        now = datetime.now()
+        prices_data = self.api.get_product_prices(product_ids, store_id)
+        now = datetime.now(timezone.utc)
         
-        for product_id, price in prices.items():
-            history = PriceHistory(
+        for price_data in prices_data:
+            if not price_data.get("items"):
+                continue
+                
+            product_id = price_data["productId"]
+            items = price_data["items"]
+            if not items:
+                continue
+                
+            price_info = items[0].get("price", {})
+            regular_price = price_info.get("regular")
+            promo_price = price_info.get("promo")
+            
+            if not regular_price:
+                continue
+                
+            price_history = PriceHistory(
                 product_id=product_id,
                 store_id=store_id,
-                price=price,
+                price=float(regular_price),
+                promo_price=float(promo_price) if promo_price else None,
                 captured_at=now
             )
-            self.db.add(history)
-        
+            self.db.add(price_history)
+            
         self.db.commit()
 
     def get_product_prices(
         self, product_ids: List[str], store_id: str
     ) -> List[PriceHistory]:
         """Get prices for products."""
-        prices_data = self.api.get_product_prices(product_ids, store_id)
-        price_history = []
-
-        for price_data in prices_data:
-            price = PriceHistory(
-                product_id=price_data["productId"],
-                store_id=store_id,
-                price=float(price_data["items"][0]["price"]["regular"]),
-                promo_price=float(price_data["items"][0]["price"].get("promo", 0))
-                if "promo" in price_data["items"][0]["price"]
-                else None,
-                captured_at=datetime.now()
+        stmt = (
+            select(PriceHistory)
+            .filter(
+                PriceHistory.product_id.in_(product_ids),
+                PriceHistory.store_id == store_id
             )
-            self.db.add(price)
-            price_history.append(price)
-
-        self.db.commit()
-        return price_history
+            .order_by(PriceHistory.captured_at.desc())
+        )
+        return self.db.execute(stmt).scalars().all()
 
 
 class BasketService:
@@ -123,7 +134,8 @@ class BasketService:
         basket = Basket(
             name=name,
             store_id=store_id,
-            is_template=is_template
+            is_template=is_template,
+            created_at=datetime.now(timezone.utc)
         )
         self.db.add(basket)
         self.db.commit()
@@ -133,7 +145,7 @@ class BasketService:
         self, basket_id: int, product_id: str, quantity: int = 1
     ) -> BasketItem:
         """Add a product to a basket."""
-        basket = self.db.get(Basket, basket_id)
+        basket = self.db.query(Basket).get(basket_id)
         if not basket:
             raise ValueError("Basket not found")
 
@@ -155,7 +167,8 @@ class BasketService:
         item = BasketItem(
             basket_id=basket_id,
             product_id=product_id,
-            quantity=quantity
+            quantity=quantity,
+            added_at=datetime.now(timezone.utc)
         )
         self.db.add(item)
         self.db.commit()
@@ -163,23 +176,26 @@ class BasketService:
 
     def clone_basket(self, basket_id: int, new_name: str) -> Basket:
         """Clone an existing basket."""
-        original = self.db.get(Basket, basket_id)
+        original = self.db.query(Basket).get(basket_id)
         if not original:
-            raise ValueError("Original basket not found")
+            raise ValueError(f"Basket {basket_id} not found")
 
         clone = Basket(
             name=new_name,
             store_id=original.store_id,
-            parent_basket_id=original.id
+            is_template=False,
+            parent_basket_id=original.id,
+            created_at=datetime.now(timezone.utc)
         )
         self.db.add(clone)
-        self.db.flush()
+        self.db.flush()  # Get clone.id
 
         for item in original.items:
             clone_item = BasketItem(
                 basket_id=clone.id,
                 product_id=item.product_id,
-                quantity=item.quantity
+                quantity=item.quantity,
+                added_at=datetime.now(timezone.utc)
             )
             self.db.add(clone_item)
 
@@ -196,49 +212,171 @@ class InflationService:
     def calculate_basket_inflation(
         self, basket_id: int
     ) -> Tuple[float, datetime]:
-        """Calculate inflation for a basket."""
+        """Calculate inflation for a basket.
+        
+        Args:
+            basket_id: ID of the basket to calculate inflation for
+            
+        Returns:
+            Tuple[float, datetime]: (inflation percentage, calculation timestamp)
+            
+        Raises:
+            ValueError: If basket not found or has no items
+        """
+        print(f"\n=== Starting Inflation Calculation for Basket {basket_id} ===")
+        now = datetime.now(timezone.utc)
+        
         # Get basket and items
-        stmt = (
-            select(Basket)
-            .options(joinedload(Basket.items))
-            .where(Basket.id == basket_id)
-        )
-        basket = self.db.scalar(stmt)
+        basket = self.db.query(Basket).get(basket_id)
         if not basket:
             raise ValueError(f"Basket {basket_id} not found")
-
-        total_old = 0.0
-        total_new = 0.0
-        now = datetime.now()
-
-        # Get price history for basket items
+            
+        print(f"Found basket: {basket.name} created at {basket.created_at}")
+        
+        if not basket.items:
+            raise ValueError(f"Basket {basket_id} has no items")
+            
+        print(f"Found {len(basket.items)} items in basket")
+        print(f"Current time: {now}")
+        
+        # Get all product IDs
+        product_ids = [item.product_id for item in basket.items]
+        print(f"\nFetching prices for products: {product_ids}")
+        
+        # Get all prices for these products
+        stmt = (
+            select(PriceHistory)
+            .filter(
+                PriceHistory.product_id.in_(product_ids),
+                PriceHistory.store_id == basket.store_id
+            )
+            .order_by(PriceHistory.captured_at)
+        )
+        all_prices = self.db.execute(stmt).scalars().all()
+        
+        for price in all_prices:
+            print(f"Price {price.price} for product {price.product_id} at {price.captured_at}")
+        
+        # Calculate total values
+        total_base_value = 0.0
+        total_current_value = 0.0
+        base_date = None
+        
+        print("\n=== Processing Each Item ===")
         for item in basket.items:
-            # Get oldest and newest prices for this item
-            prices = (
-                self.db.query(PriceHistory)
-                .filter(
-                    PriceHistory.product_id == item.product_id,
-                    PriceHistory.store_id == basket.store_id
-                )
-                .order_by(PriceHistory.captured_at)
-                .all()
+            print(f"\nItem: product={item.product_id}, quantity={item.quantity}")
+            
+            # Get all prices for this product
+            product_prices = [p for p in all_prices if p.product_id == item.product_id]
+            if not product_prices:
+                print("WARNING: No prices found for product, skipping")
+                continue
+                
+            # Get base price (closest before basket creation)
+            earliest_prices = sorted(
+                [p for p in product_prices if p.captured_at <= basket.created_at],
+                key=lambda p: p.captured_at
+            )
+            print(f"Found {len(earliest_prices)} prices before basket creation:")
+            for p in earliest_prices:
+                print(f"  Price: {p.price} at {p.captured_at}")
+                
+            base_price = earliest_prices[0] if earliest_prices else None
+            
+            # Get current price (most recent)
+            current_prices = sorted(product_prices, key=lambda p: p.captured_at, reverse=True)
+            print(f"Found {len(current_prices)} prices for current value:")
+            for p in current_prices:
+                print(f"  Price: {p.price} at {p.captured_at}")
+            
+            current_price = current_prices[0] if current_prices else None
+            
+            if not base_price or not current_price:
+                print("WARNING: Missing base or current price, skipping item")
+                continue
+                
+            # Update base date to earliest price date found
+            if base_date is None or base_price.captured_at < base_date:
+                base_date = base_price.captured_at
+                print(f"Updated base date to {base_date}")
+                
+            # Calculate weighted values
+            item_base_value = base_price.price * item.quantity
+            item_current_value = current_price.price * item.quantity
+            print(f"Base value: {item_base_value} (price={base_price.price} * quantity={item.quantity})")
+            print(f"Current value: {item_current_value} (price={current_price.price} * quantity={item.quantity})")
+            
+            total_base_value += item_base_value
+            total_current_value += item_current_value
+        
+        print(f"\n=== Final Calculations ===")
+        print(f"Total base value: {total_base_value}")
+        print(f"Total current value: {total_current_value}")
+        
+        if total_base_value == 0:
+            print("WARNING: No valid prices found, returning 0% inflation")
+            self._update_inflation_index(basket_id, 0.0, basket.created_at, now)
+            return 0.0, now
+            
+        # Calculate percentage change
+        inflation = ((total_current_value / total_base_value) - 1.0) * 100.0
+        print(f"Calculated inflation: {inflation}%")
+        
+        # Use the earliest price date as base date, fallback to basket creation
+        base_date = base_date or basket.created_at
+        print(f"Final base date: {base_date}")
+        
+        # Update index and return
+        print("\n=== Updating Index ===")
+        self._update_inflation_index(basket_id, inflation, base_date, now)
+        print("Index updated successfully")
+        
+        return inflation, now
+
+    def _update_inflation_index(
+        self,
+        basket_id: int,
+        inflation: float,
+        base_date: datetime,
+        calculation_time: datetime
+    ) -> None:
+        """Update or create inflation index."""
+        print(f"Updating index for basket {basket_id}")
+        print(f"Inflation: {inflation}%")
+        print(f"Base date: {base_date}")
+        print(f"Calculation time: {calculation_time}")
+        
+        try:
+            index = (
+                self.db.query(InflationIndex)
+                .filter(InflationIndex.basket_id == basket_id)
+                .first()
             )
             
-            if not prices:
-                continue
-
-            # Calculate weighted prices (price * quantity)
-            oldest_price = prices[0].price
-            newest_price = prices[-1].price
-            total_old += oldest_price * item.quantity
-            total_new += newest_price * item.quantity
-
-        if total_old == 0:
-            return 0.0, now
-
-        # Calculate percentage change
-        inflation = ((total_new - total_old) / total_old) * 100.0
-        return inflation, now
+            if index:
+                print("Updating existing index")
+                index.base_index = 100.0
+                index.current_index = 100.0 + inflation
+                index.base_date = base_date
+                index.calculation_time = calculation_time
+            else:
+                print("Creating new index")
+                index = InflationIndex(
+                    basket_id=basket_id,
+                    base_index=100.0,
+                    current_index=100.0 + inflation,
+                    base_date=base_date,
+                    calculation_time=calculation_time
+                )
+                self.db.add(index)
+                
+            self.db.commit()
+            print("Index saved successfully")
+            
+        except Exception as e:
+            self.db.rollback()
+            print(f"ERROR: Failed to update index: {e}")
+            raise
 
 
 class ErrorService:
@@ -248,15 +386,15 @@ class ErrorService:
         self.db = db
 
     def log_error(
-        self, level: str, component: str, message: str, details: Optional[str] = None
+        self, level: str, component: str, message: str, details: str = None
     ) -> ErrorLog:
-        """Log an error."""
+        """Log an error to the database."""
         error = ErrorLog(
             level=level,
             component=component,
             message=message,
             details=details,
-            logged_at=datetime.now()
+            timestamp=datetime.now(timezone.utc)
         )
         self.db.add(error)
         self.db.commit()

@@ -203,7 +203,8 @@ def test_error_log_creation(db_session):
 
 
 def test_store_unique_constraint(db_session):
-    """Test that store IDs must be unique."""
+    """Test that store_id must be unique."""
+    # Create first store
     store1 = Store(
         store_id="store123",
         name="Test Store 1",
@@ -212,18 +213,25 @@ def test_store_unique_constraint(db_session):
         latitude=37.7749,
         longitude=-122.4194
     )
+    db_session.add(store1)
+    db_session.commit()
+
+    # Try to create second store with same store_id
     store2 = Store(
-        store_id="store123",  # Same ID
+        store_id="store123",  # Same store_id
         name="Test Store 2",
         address="456 Test Ave",
         postal_code="12345",
         latitude=37.7749,
         longitude=-122.4194
     )
+    db_session.add(store2)
     
-    db_session.add(store1)
-    db_session.commit()
-    
-    with pytest.raises(IntegrityError):
-        db_session.add(store2)
+    # Should raise IntegrityError
+    with pytest.raises(IntegrityError) as exc_info:
         db_session.commit()
+    
+    assert "UNIQUE constraint failed: stores.store_id" in str(exc_info.value)
+    
+    # Clean up
+    db_session.rollback()

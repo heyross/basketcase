@@ -126,38 +126,28 @@ def calculate_inflation(basket_id: int):
             
             # Get the basket name
             basket = db.query(Basket).get(basket_id)
+            if not basket:
+                click.echo(f"Error: Basket {basket_id} not found", err=True)
+                return
             
-            # Get all inflation indices for this basket
-            indices = (
+            # Get the inflation index
+            index = (
                 db.query(InflationIndex)
-                .outerjoin(Category, InflationIndex.category_id == Category.id)
                 .filter(InflationIndex.basket_id == basket_id)
-                .order_by(InflationIndex.category_id.nulls_first())
-                .all()
+                .first()
             )
+            
+            if not index:
+                click.echo(f"Error: No inflation data found for basket {basket_id}", err=True)
+                return
             
             # Display results
             click.echo(f"\nInflation Report for Basket: {basket.name}")
             click.echo(f"Calculated At: {calculated_at}")
             click.echo("\nOverall Basket:")
-            
-            # Find the overall index (no category)
-            overall = next(i for i in indices if i.category_id is None)
-            click.echo(f"Base Index: 100.0 (at {overall.base_date})")
-            click.echo(f"Current Index: {overall.current_index:.1f}")
+            click.echo(f"Base Index: {index.base_index:.1f} (at {index.base_date})")
+            click.echo(f"Current Index: {index.current_index:.1f}")
             click.echo(f"Change: {inflation:+.1f}%")
-            
-            # Show category-specific indices
-            category_indices = [i for i in indices if i.category_id is not None]
-            if category_indices:
-                click.echo("\nBy Category:")
-                for idx in category_indices:
-                    category = db.query(Category).get(idx.category_id)
-                    change = idx.current_index - 100.0
-                    click.echo(
-                        f"{category.name}: {change:+.1f}% "
-                        f"(Index: {idx.current_index:.1f})"
-                    )
             
         except Exception as e:
             ErrorService(db).log_error("ERROR", "CLI", str(e))
