@@ -1,0 +1,7 @@
+# Kroger API Credentials
+# Get these from https://developer.kroger.com/
+KROGER_CLIENT_ID=basketcase-2432612430342453716e50625056787563726a59614f2f7450456c6d65574a58564b6962534a385474786c4f3137332f445347504236686562644a3649491575672058906610
+KROGER_CLIENT_SECRET=your-client-secret-here
+
+# Database settings (optional)
+DATABASE_URL=sqlite:///data/basketcase.db
